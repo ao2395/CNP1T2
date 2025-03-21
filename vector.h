@@ -1,23 +1,105 @@
-#include "stdio.h"
-struct MyVector
-{
-	private:
-		int *data;						//pointer to int(array) to store elements
-		int v_size;						//current size of vector (number of elements in vector)
-		int v_capacity;					//capacity of vector
-	public:
-		MyVector(int cap=0);			//Constructor
-		~MyVector();					//Destructor
-		int size() const;				//Return current size of vector
-		int capacity() const;			//Return capacity of vector
-		bool empty() const; 			//Rturn true if the vector is empty, False otherwise
-		const int& front();				//Returns reference of the first element in the vector
-		const int& back();				//Returns reference of the Last element in the vector
-		void push_back(int element);		//Add an element at the end of vector
-		void insert(int index, int element); //Add an element at the index 
-		void erase(int index);			//Removes an element from the index
-		int& operator[](int index);			//Returns the reference of an element at given index
-		int& at(int index); 				//return reference of the element at given index
-		void shrink_to_fit();			//Reduce vector capacity to fit its size
-		void display();
-};
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+
+typedef struct {
+    int *data;
+    int v_size;
+    int v_capacity;
+} Vector;
+
+// Function prototypes
+void vector_init(Vector *vec, int cap);
+void vector_free(Vector *vec);
+int vector_size(const Vector *vec);
+int vector_capacity(const Vector *vec);
+bool vector_empty(const Vector *vec);
+int vector_front(const Vector *vec);
+int vector_back(const Vector *vec);
+void vector_push_back(Vector *vec, int element);
+void vector_insert(Vector *vec, int index, int element);
+void vector_erase(Vector *vec, int index);
+int vector_at(Vector *vec, int index);
+void vector_shrink_to_fit(Vector *vec);
+void vector_display(const Vector *vec);
+
+// Function implementations
+void vector_init(Vector *vec, int cap) {
+    vec->v_size = 0;
+    vec->v_capacity = cap > 0 ? cap : 1;
+    vec->data = (int *)malloc(vec->v_capacity * sizeof(int));
+}
+
+void vector_free(Vector *vec) {
+    free(vec->data);
+    vec->v_size = 0;
+    vec->v_capacity = 0;
+}
+
+int vector_size(const Vector *vec) {
+    return vec->v_size;
+}
+
+int vector_capacity(const Vector *vec) {
+    return vec->v_capacity;
+}
+
+bool vector_empty(const Vector *vec) {
+    return vec->v_size == 0;
+}
+
+int vector_front(const Vector *vec) {
+    return vec->data[0];
+}
+
+int vector_back(const Vector *vec) {
+    return vec->data[vec->v_size - 1];
+}
+
+void vector_push_back(Vector *vec, int element) {
+    if (vec->v_size == vec->v_capacity) {
+        vec->v_capacity *= 2;
+        vec->data = (int *)realloc(vec->data, vec->v_capacity * sizeof(int));
+    }
+    vec->data[vec->v_size++] = element;
+}
+
+void vector_insert(Vector *vec, int index, int element) {
+    if (index < 0 || index > vec->v_size) return;
+
+    if (vec->v_size == vec->v_capacity) {
+        vec->v_capacity *= 2;
+        vec->data = (int *)realloc(vec->data, vec->v_capacity * sizeof(int));
+    }
+
+    for (int i = vec->v_size; i > index; --i)
+        vec->data[i] = vec->data[i - 1];
+
+    vec->data[index] = element;
+    vec->v_size++;
+}
+
+void vector_erase(Vector *vec, int index) {
+    if (index < 0 || index >= vec->v_size) return;
+
+    for (int i = index; i < vec->v_size - 1; ++i)
+        vec->data[i] = vec->data[i + 1];
+
+    vec->v_size--;
+}
+
+int vector_at(Vector *vec, int index) {
+    return vec->data[index];
+}
+
+void vector_shrink_to_fit(Vector *vec) {
+    vec->v_capacity = vec->v_size;
+    vec->data = (int *)realloc(vec->data, vec->v_capacity * sizeof(int));
+}
+
+void vector_display(const Vector *vec) {
+    printf("[");
+    for (int i = 0; i < vec->v_size; i++)
+        printf("%d%s", vec->data[i], i == vec->v_size - 1 ? "" : ", ");
+    printf("]\n");
+}
