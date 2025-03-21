@@ -1,46 +1,48 @@
-#Reference
-#http://makepp.sourceforge.net/1.19/makepp_tutorial.html
+# Reference
+# http://makepp.sourceforge.net/1.19/makepp_tutorial.html
 
 CC = gcc -c
 SHELL = /bin/bash
 
-# compiling flags here
+# Compiling flags here
 CFLAGS = -Wall -I.
 
 LINKER = gcc -o
-# linking flags here
-LFLAGS   = -Wall
+# Linking flags here
+LFLAGS = -Wall
 
 OBJDIR = ../obj
 
-CLIENT_OBJECTS := $(OBJDIR)/rdt_sender.o $(OBJDIR)/common.o $(OBJDIR)/packet.o
-SERVER_OBJECTS := $(OBJDIR)/rdt_receiver.o $(OBJDIR)/common.o $(OBJDIR)/packet.o
+# Object files for client and server
+CLIENT_OBJECTS := $(OBJDIR)/rdt_sender.o $(OBJDIR)/common.o $(OBJDIR)/packet.o $(OBJDIR)/vector.o
+SERVER_OBJECTS := $(OBJDIR)/rdt_receiver.o $(OBJDIR)/common.o $(OBJDIR)/packet.o $(OBJDIR)/vector.o
 
-#Program name
+# Program names
 CLIENT := $(OBJDIR)/rdt_sender
 SERVER := $(OBJDIR)/rdt_receiver
 
-rm       = rm -f
-rmdir    = rmdir 
+# Target
+TARGET: $(OBJDIR) $(CLIENT) $(SERVER)
 
-TARGET:	$(OBJDIR) $(CLIENT)	$(SERVER)
-
-
-$(CLIENT):	$(CLIENT_OBJECTS)
-	$(LINKER)  $@  $(CLIENT_OBJECTS)
-	@echo "Link complete!"
+$(CLIENT): $(CLIENT_OBJECTS)
+	$(LINKER) $@ $(CLIENT_OBJECTS)
+	@echo "Client link complete!"
 
 $(SERVER): $(SERVER_OBJECTS)
-	$(LINKER)  $@  $(SERVER_OBJECTS)
-	@echo "Link complete!"
+	$(LINKER) $@ $(SERVER_OBJECTS)
+	@echo "Server link complete!"
 
-$(OBJDIR)/%.o:	%.c common.h packet.h
-	$(CC) $(CFLAGS)  $< -o $@
-	@echo "Compilation complete!"
+$(OBJDIR)/%.o: %.c common.h packet.h vector.h
+	$(CC) $(CFLAGS) $< -o $@
+	@echo "Compiled: $<"
+
+$(OBJDIR)/vector.o: vector.c vector.h
+	$(CC) $(CFLAGS) vector.c -o $(OBJDIR)/vector.o
+	@echo "Compiled: vector.c"
 
 clean:
-	@if [ -a $(OBJDIR) ]; then rm -r $(OBJDIR); fi;
+	@if [ -d $(OBJDIR) ]; then rm -r $(OBJDIR); fi;
 	@echo "Cleanup complete!"
 
 $(OBJDIR):
-	@[ -a $(OBJDIR) ]  || mkdir $(OBJDIR)
+	@[ -d $(OBJDIR) ] || mkdir $(OBJDIR)

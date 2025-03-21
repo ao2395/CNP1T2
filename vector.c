@@ -1,4 +1,5 @@
 #include "vector.h"
+#include "packet.h"
 
 void vector_init(Vector *vec, int cap) {
     vec->v_size = 0;
@@ -32,15 +33,15 @@ int vector_back(const Vector *vec) {
     return vec->data[vec->v_size - 1];
 }
 
-void vector_push_back(Vector *vec, int element) {
+void vector_push_back(Vector *vec, tcp_packet* packet) {
     if (vec->v_size == vec->v_capacity) {
         vec->v_capacity *= 2;
         vec->data = (int *)realloc(vec->data, vec->v_capacity * sizeof(int));
     }
-    vec->data[vec->v_size++] = element;
+    vec->data[vec->v_size++] = packet;
 }
 
-void vector_insert(Vector *vec, int index, int element) {
+void vector_insert(Vector *vec, int index, tcp_packet* packet) {
     if (index < 0 || index > vec->v_size) return;
 
     if (vec->v_size == vec->v_capacity) {
@@ -51,7 +52,7 @@ void vector_insert(Vector *vec, int index, int element) {
     for (int i = vec->v_size; i > index; --i)
         vec->data[i] = vec->data[i - 1];
 
-    vec->data[index] = element;
+    vec->data[index] = packet;
     vec->v_size++;
 }
 

@@ -13,6 +13,7 @@
 
 #include"packet.h"
 #include"common.h"
+#include "vector.h"
 
 
 void start_timer(void);
@@ -26,7 +27,7 @@ void init_timer(int delay, void (*sig_handler)(int));
 int next_seqno=0;
 int send_base=0;
 int window_size = 10; // 10 windowsize
-tcp_packet* packet_window[10]; //window
+Vector packet_window[1]; //window
 int sockfd, serverlen;
 struct sockaddr_in serveraddr;
 struct itimerval timer; 
@@ -56,6 +57,7 @@ void resend_packets(int sig) //resend oldest packet
             }
         } else {
             // send oldest packet normally
+            tcp_packet* oldest_packet = vector_front(packet_window); 
             tcp_packet* oldest_packet = packet_window[send_base/1456 % window_size]; 
             if (oldest_packet != NULL) {
                 printf("Timeout - packet resend with seqno: %d\n", oldest_packet->hdr.seqno);
