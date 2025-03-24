@@ -24,10 +24,11 @@ void init_timer(int delay, void (*sig_handler)(int));
 
 #define STDIN_FD    0
 #define RETRY  120 
+#define MAX_WINDOW_SIZE 100 // Maximum window size allowed
+
 int next_seqno=0;
 int send_base=0;
-int window_size = 10; // 10 windowsize
-Vector packet_window; //window
+Vector packet_window; // Window vector
 int sockfd, serverlen;
 struct sockaddr_in serveraddr;
 struct itimerval timer; 
@@ -46,7 +47,7 @@ void resend_packets(int sig) //resend oldest packet
 {
     if (sig == SIGALRM)
     {
-        VLOG(INFO, "Timeout happend");
+        VLOG(INFO, "Timeout happened");
         
         // resend eof packet if needed
         if (eof_reached && eof_packet_sent && !eof_acked) {
@@ -57,7 +58,8 @@ void resend_packets(int sig) //resend oldest packet
             }
         } else {
             // send oldest packet normally
-            tcp_packet* oldest_packet = vector_at(&packet_window, send_base/1456 % window_size); 
+            int window_index = (send_base/DATA_SIZE) % vector_capacity(&packet_window);
+            tcp_packet* oldest_packet = vector_at(&packet_window, window_index); 
             if (oldest_packet != NULL) {
                 printf("Timeout - packet resend with seqno: %d\n", oldest_packet->hdr.seqno);
                 if(sendto(sockfd, oldest_packet, TCP_HDR_SIZE + get_data_size(oldest_packet), 0, 
@@ -65,7 +67,7 @@ void resend_packets(int sig) //resend oldest packet
                     error("sendto");
                 }
             } else {
-                // printf("Warning: No packet found at index %d to resend\n", send_base % window_size);
+                printf("Warning: No packet found at index %d to resend\n", window_index);
             }
         }
         
@@ -145,24 +147,33 @@ int main (int argc, char **argv)
     serveraddr.sin_port = htons(portno);
 
     assert(MSS_SIZE - TCP_HDR_SIZE > 0);
-    vector_init(&packet_window, window_size); // intalize packet window
+    
+    // Initialize packet window with MAX_WINDOW_SIZE (10)
+    vector_init(&packet_window, MAX_WINDOW_SIZE);
+    
+    // Dynamic window size - start small and can grow up to MAX_WINDOW_SIZE
+    int current_window_size = 1; // Start with window size of 1
 
-
-    //Stop and wait protocol
+    // Stop and wait protocol with dynamic window
     init_timer(RETRY, resend_packets);
     next_seqno = 0;
-    send_base = 0;  
-    //int fileclosed = 0;
+    send_base = 0;
     
     while (1) {
         // when eof is acked exit
         if (eof_acked) {
-            printf("EOF packet has been ack'd. Exiting .\n");
+            printf("EOF packet has been ack'd. Exiting.\n");
             break;
         }
         
-        // send if window isnt full or isnt at eof
-        while (next_seqno < send_base + window_size * DATA_SIZE && !eof_reached) {
+        // Calculate current window size based on vector size, but cap at MAX_WINDOW_SIZE
+        current_window_size = vector_size(&packet_window) + 1;
+        if (current_window_size > MAX_WINDOW_SIZE) {
+            current_window_size = MAX_WINDOW_SIZE;
+        }
+        
+        // send if window isn't full or isn't at eof
+        while (next_seqno < send_base + current_window_size * DATA_SIZE && !eof_reached) {
             len = fread(buffer, 1, DATA_SIZE, fp); // read next packet
             
             if (len <= 0) { // if eof reached
@@ -170,10 +181,9 @@ int main (int argc, char **argv)
                 
                 eof_packet = make_packet(0);
                 eof_reached = 1;
-                //fileclosed = 1;
                 fclose(fp);
                 
-                // dont send eof packet for now, ack everytihng else first
+                // don't send eof packet for now, ack everything else first
                 break;
             }
             
@@ -183,18 +193,26 @@ int main (int argc, char **argv)
             sndpkt->hdr.seqno = next_seqno;
             
             // store in the window
-            int oldestpacket = (next_seqno / DATA_SIZE) % window_size;
-            tcp_packet* existing = vector_at(&packet_window, oldestpacket);
+            int window_index = (next_seqno / DATA_SIZE) % vector_capacity(&packet_window);
+            tcp_packet* existing = vector_at(&packet_window, window_index);
             if (existing != NULL) {
                 free(existing);
-            }
-            packet_window.data[oldestpacket] = (struct tcp_packet*)sndpkt;
-            if (oldestpacket >= vector_size(&packet_window)) {
-                packet_window.v_size = oldestpacket + 1;
+                packet_window.data[window_index] = NULL;
             }
             
-            VLOG(DEBUG, "Sending packet %d to %s", 
-                next_seqno, inet_ntoa(serveraddr.sin_addr));
+            // Update the packet in the vector
+            packet_window.data[window_index] = sndpkt;
+            
+            // Update vector size if needed
+            if (window_index >= vector_size(&packet_window)) {
+                packet_window.v_size = window_index + 1;
+                if (packet_window.v_size > MAX_WINDOW_SIZE) {
+                    packet_window.v_size = MAX_WINDOW_SIZE;
+                }
+            }
+            
+            VLOG(DEBUG, "Sending packet %d to %s (Window size: %d)", 
+                next_seqno, inet_ntoa(serveraddr.sin_addr), current_window_size);
             
             // send packet 
             if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + len, 0, 
@@ -207,12 +225,12 @@ int main (int argc, char **argv)
                 start_timer();
             }
             
-            // move next seqiuence number by data size
+            // move next sequence number by data size
             next_seqno += len;
             packet_count++; 
         }
         
-        // if all data has been acked and eof packet hasnt been sent but has been reached
+        // if all data has been acked and eof packet hasn't been sent but has been reached
         if (eof_reached && !eof_packet_sent && send_base >= next_seqno) {
             printf("All data acknowledged, sending EOF packet\n");
             if(sendto(sockfd, eof_packet, TCP_HDR_SIZE, 0,  // send eof packet
@@ -231,11 +249,11 @@ int main (int argc, char **argv)
         }
         
         recvpkt = (tcp_packet *)buffer;
-        // printf("ACK RECEIVED: %d (send_base: %d)\n", 
-        //        recvpkt->hdr.ackno, 
-        //        send_base);
+        printf("ACK RECEIVED: %d (send_base: %d)\n", 
+               recvpkt->hdr.ackno, 
+               send_base);
         
-        // check if ack is for eof (FIN FLAG) so it doesnt mix up with dupe acks of the last packet
+        // check if ack is for eof (FIN FLAG) so it doesn't mix up with dupe acks of the last packet
         if (eof_packet_sent && recvpkt->hdr.ackno >= next_seqno && recvpkt->hdr.ctr_flags==FIN) {
             printf("Received ACK for EOF packet\n");
             eof_acked = 1;
@@ -243,17 +261,22 @@ int main (int argc, char **argv)
             continue;
         }
         
-        if(recvpkt->hdr.ackno > send_base) {// if ack is new
+        if(recvpkt->hdr.ackno > send_base) { // if ack is new
             previous_acks[0] = previous_acks[1] = previous_acks[2] = -1; // reset dupe ack array
             acknum = 0;
             
             // free ack'd packet and update send base
             while(send_base < recvpkt->hdr.ackno) {
-                int idx = (send_base / DATA_SIZE) % window_size;
-                tcp_packet* packet_to_free = vector_at(&packet_window, idx);
+                int window_index = (send_base / DATA_SIZE) % vector_capacity(&packet_window);
+                tcp_packet* packet_to_free = vector_at(&packet_window, window_index);
                 if(packet_to_free != NULL) {
                     free(packet_to_free);
-                    packet_window.data[idx] = NULL;
+                    packet_window.data[window_index] = NULL;
+                    
+                    // After successful ACK, potentially increase window size
+                    if (current_window_size < MAX_WINDOW_SIZE) {
+                        current_window_size++;
+                    }
                 }
                 
                 // increment by full packet size
@@ -283,8 +306,8 @@ int main (int argc, char **argv)
                 VLOG(INFO, "3 Duplicate ACKs detected - Fast retransmit"); 
                 
                 // fast retransmit the packet
-                int oldestpacket = (send_base / DATA_SIZE) % window_size;
-                tcp_packet* retransmit_packet = vector_at(&packet_window, oldestpacket);
+                int window_index = (send_base / DATA_SIZE) % vector_capacity(&packet_window);
+                tcp_packet* retransmit_packet = vector_at(&packet_window, window_index);
                 
                 if (retransmit_packet != NULL) { // send oldest packet again
                     printf("Fast retransmitting packet with seqno: %d\n", retransmit_packet->hdr.seqno);
@@ -292,16 +315,28 @@ int main (int argc, char **argv)
                             (const struct sockaddr *)&serveraddr, serverlen) < 0) {
                         error("sendto");
                     }
+                    
+                    // On packet loss detected by triple duplicate ACK, reduce window size
+                    if (current_window_size > 1) {
+                        current_window_size = current_window_size / 2; // Cut window size in half (TCP-like behavior)
+                        if (current_window_size < 1) current_window_size = 1;
+                    }
+                    
                     // reset dupe ack array and ctr
                     previous_acks[0] = previous_acks[1] = previous_acks[2] = -1;
                     acknum = 0;
                 } else {
-                    printf("Warning: No packet found at index %d for fast retransmit\n", oldestpacket);
+                    printf("Warning: No packet found at index %d for fast retransmit\n", window_index);
                 }
             }
         }
+        
+        // Display current window status
+        printf("Current window status - Size: %d, Capacity: %d, Next Seq: %d, Base: %d\n", 
+               current_window_size, vector_capacity(&packet_window), next_seqno, send_base);
     }
     
+    // Free any remaining packets in the window
     for (int i = 0; i < vector_capacity(&packet_window); i++) {
         tcp_packet* packet = vector_at(&packet_window, i);
         if (packet != NULL) {
