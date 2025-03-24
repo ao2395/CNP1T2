@@ -4,7 +4,10 @@
 void vector_init(Vector *vec, int cap) {
     vec->v_size = 0;
     vec->v_capacity = cap > 0 ? cap : 1;
-    vec->data = (int *)malloc(vec->v_capacity * sizeof(int));
+    vec->data = (struct tcp_packet**)malloc(vec->v_capacity * sizeof(struct tcp_packet*));
+    for (int i = 0; i < vec->v_capacity; i++) {
+        vec->data[i] = NULL;
+    }
 }
 
 void vector_free(Vector *vec) {
@@ -25,28 +28,28 @@ bool vector_empty(const Vector *vec) {
     return vec->v_size == 0;
 }
 
-int vector_front(const Vector *vec) {
+struct tcp_packet* vector_front(const Vector *vec) {
     return vec->data[0];
 }
 
-int vector_back(const Vector *vec) {
+struct tcp_packet* vector_back(const Vector *vec) {
     return vec->data[vec->v_size - 1];
 }
 
-void vector_push_back(Vector *vec, tcp_packet* packet) {
+void vector_push_back(Vector *vec, struct tcp_packet* packet) {
     if (vec->v_size == vec->v_capacity) {
         vec->v_capacity *= 2;
-        vec->data = (int *)realloc(vec->data, vec->v_capacity * sizeof(int));
+        vec->data = (struct tcp_packet**)realloc(vec->data, vec->v_capacity * sizeof(struct tcp_packet*));
     }
     vec->data[vec->v_size++] = packet;
 }
 
-void vector_insert(Vector *vec, int index, tcp_packet* packet) {
+void vector_insert(Vector *vec, int index, struct tcp_packet* packet) {
     if (index < 0 || index > vec->v_size) return;
 
     if (vec->v_size == vec->v_capacity) {
         vec->v_capacity *= 2;
-        vec->data = (int *)realloc(vec->data, vec->v_capacity * sizeof(int));
+        vec->data = (struct tcp_packet**)realloc(vec->data, vec->v_capacity * sizeof(struct tcp_packet*));
     }
 
     for (int i = vec->v_size; i > index; --i)
@@ -65,18 +68,24 @@ void vector_erase(Vector *vec, int index) {
     vec->v_size--;
 }
 
-int vector_at(Vector *vec, int index) {
+struct tcp_packet* vector_at(Vector *vec, int index) {
+    if (index < 0 || index >= vec->v_capacity) {
+        return NULL;
+    }
     return vec->data[index];
 }
 
 void vector_shrink_to_fit(Vector *vec) {
     vec->v_capacity = vec->v_size;
-    vec->data = (int *)realloc(vec->data, vec->v_capacity * sizeof(int));
+    vec->data = (struct tcp_packet**)realloc(vec->data, vec->v_capacity * sizeof(struct tcp_packet*));
 }
 
 void vector_display(const Vector *vec) {
     printf("[");
-    for (int i = 0; i < vec->v_size; i++)
-        printf("%d%s", vec->data[i], i == vec->v_size - 1 ? "" : ", ");
+    for (int i = 0; i < vec->v_size; i++) {
+        // Use tcp_packet from packet.h rather than struct tcp_packet
+        tcp_packet* pkt = (tcp_packet*)vec->data[i];
+        printf("%d%s", pkt->hdr.seqno, i == vec->v_size - 1 ? "" : ", ");
+    }
     printf("]\n");
 }

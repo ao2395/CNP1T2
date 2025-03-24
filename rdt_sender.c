@@ -11,8 +11,8 @@
 #include <time.h>
 #include <assert.h>
 
-#include"packet.h"
-#include"common.h"
+#include "packet.h"
+#include "common.h"
 #include "vector.h"
 
 
@@ -27,7 +27,7 @@ void init_timer(int delay, void (*sig_handler)(int));
 int next_seqno=0;
 int send_base=0;
 int window_size = 10; // 10 windowsize
-Vector packet_window[1]; //window
+Vector packet_window; //window
 int sockfd, serverlen;
 struct sockaddr_in serveraddr;
 struct itimerval timer; 
@@ -57,8 +57,7 @@ void resend_packets(int sig) //resend oldest packet
             }
         } else {
             // send oldest packet normally
-            tcp_packet* oldest_packet = vector_front(packet_window); 
-            tcp_packet* oldest_packet = packet_window[send_base/1456 % window_size]; 
+            tcp_packet* oldest_packet = vector_at(&packet_window, send_base/1456 % window_size); 
             if (oldest_packet != NULL) {
                 printf("Timeout - packet resend with seqno: %d\n", oldest_packet->hdr.seqno);
                 if(sendto(sockfd, oldest_packet, TCP_HDR_SIZE + get_data_size(oldest_packet), 0, 
@@ -146,9 +145,7 @@ int main (int argc, char **argv)
     serveraddr.sin_port = htons(portno);
 
     assert(MSS_SIZE - TCP_HDR_SIZE > 0);
-    for(int i = 0; i < window_size; i++) { // intalize packet window
-        packet_window[i] = NULL;
-    }
+    vector_init(&packet_window, window_size); // intalize packet window
 
 
     //Stop and wait protocol
@@ -187,7 +184,14 @@ int main (int argc, char **argv)
             
             // store in the window
             int oldestpacket = (next_seqno / DATA_SIZE) % window_size;
-            packet_window[oldestpacket] = sndpkt;
+            tcp_packet* existing = vector_at(&packet_window, oldestpacket);
+            if (existing != NULL) {
+                free(existing);
+            }
+            packet_window.data[oldestpacket] = (struct tcp_packet*)sndpkt;
+            if (oldestpacket >= vector_size(&packet_window)) {
+                packet_window.v_size = oldestpacket + 1;
+            }
             
             VLOG(DEBUG, "Sending packet %d to %s", 
                 next_seqno, inet_ntoa(serveraddr.sin_addr));
@@ -246,9 +250,10 @@ int main (int argc, char **argv)
             // free ack'd packet and update send base
             while(send_base < recvpkt->hdr.ackno) {
                 int idx = (send_base / DATA_SIZE) % window_size;
-                if(packet_window[idx] != NULL) {
-                    free(packet_window[idx]);
-                    packet_window[idx] = NULL;
+                tcp_packet* packet_to_free = vector_at(&packet_window, idx);
+                if(packet_to_free != NULL) {
+                    free(packet_to_free);
+                    packet_window.data[idx] = NULL;
                 }
                 
                 // increment by full packet size
@@ -279,7 +284,7 @@ int main (int argc, char **argv)
                 
                 // fast retransmit the packet
                 int oldestpacket = (send_base / DATA_SIZE) % window_size;
-                tcp_packet* retransmit_packet = packet_window[oldestpacket];
+                tcp_packet* retransmit_packet = vector_at(&packet_window, oldestpacket);
                 
                 if (retransmit_packet != NULL) { // send oldest packet again
                     printf("Fast retransmitting packet with seqno: %d\n", retransmit_packet->hdr.seqno);
@@ -296,6 +301,19 @@ int main (int argc, char **argv)
             }
         }
     }
+    
+    for (int i = 0; i < vector_capacity(&packet_window); i++) {
+        tcp_packet* packet = vector_at(&packet_window, i);
+        if (packet != NULL) {
+            free(packet);
+        }
+    }
+    
+    if (eof_packet != NULL) {
+        free(eof_packet);
+    }
+    
+    vector_free(&packet_window);
     
     return 0;
 }
