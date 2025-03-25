@@ -153,7 +153,7 @@ int main(int argc, char **argv) {
 
             if (eof_received) { //handling EOF and retransmission in this if else statement 
                 struct timeval wait_time; //below setting a one sec timeout to wait for more packets
-                wait_time.tv_sec = 1; 
+                wait_time.tv_sec = 5; 
                 wait_time.tv_usec = 0;
                 fd_set readfds; //making a file descriptor 
                 FD_ZERO(&readfds); //empty
