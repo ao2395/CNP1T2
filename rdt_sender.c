@@ -16,109 +16,104 @@
 #include "common.h"
 #include "vector.h"
 
-
+// declaring the timers to start stop and initialize the timers for packer retrasmitting
 void start_timer(void);
 void stop_timer(void);
-void resend_packets(int sig);
+void resend_packets(int sig); //signal handler
 void init_timer(int delay, void (*sig_handler)(int));
 
+//defining the constants for the RTT AND RTO
+#define INITIAL_RTO 3000        // rto is initially 3 seconds
+#define MAX_RTO 6000          //rto will reach a max of 6 secs
+#define MIN_RTO 100             // rto min is 100 ms
+#define ALPHA 0.125             // alpha value as suggested in the slides (recommends 0.125)
+#define BETA 0.25               // beta value as suggested in the slides  (recommends 0.25)
+#define K 4                     // the multiplier for final rto 
 
-// RTT and RTO-related constants
-#define INITIAL_RTO 3000        // Initial RTO in milliseconds (3 seconds)
-#define MAX_RTO 6000          // Maximum RTO in milliseconds (6 seconds)
-#define MIN_RTO 100             // Minimum RTO in milliseconds (100 ms)
-#define ALPHA 0.125             // Weight for SRTT calculation (RFC 6298 recommends 0.125)
-#define BETA 0.25               // Weight for RTTVAR calculation (RFC 6298 recommends 0.25)
-#define K 4                     // Multiplier for RTO calculation
 
-// Congestion control constants
-#define INITIAL_SSTHRESH 64     // Initial slow start threshold in packets
-
-// Congestion control states
-#define SLOW_START 0
+#define INITIAL_SSTHRESH 64    //initialzing the ssthresh to 64 pkts
+#define SLOW_START 0 // the two states that we can have 0 being slow start and 1 being congestion avoidance 
 #define CONGESTION_AVOIDANCE 1
 
-// Log file name
-#define CSV_FILENAME "CWND.csv"
+#define CSV_FILENAME "CWND.csv" //in order to log the chanegs in the cwnd
 
-// Packet timestamp structure to track when each packet was sent
+// defining a struct for the the pkt time stamp to know when each pkt is being sent
 typedef struct {
-    int seqno;                  // Sequence number of the packet
-    struct timeval send_time;   // Time when packet was sent
-    bool retransmitted;         // Flag to track if packet was retransmitted
+    int seqno;                  // seq num
+    struct timeval send_time;   // time pkt sent
+    bool retransmitted;         // boolean to know if the pkt is new or a retransmission (will be used later to skip in rtt calc as per karns algorithm)
 } packet_timestamp;
 
-// Function prototypes for RTT and RTO calculation
-void update_rtt(int seqno, struct timeval *send_time, bool was_retransmitted);
-void calculate_rto(void);
+//measuring rtt and rto dunctions
+void update_rtt(int seqno, struct timeval *send_time, bool was_retransmitted); //updating the calc of rtt based on the acks we are receving 
+void calculate_rto(void); // computing new rto based on the rtt changes 
+//record and get the pkt timestamps 
 int get_current_rto(void);
 void record_packet_sent(int seqno, bool is_retransmit);
 struct timeval* get_packet_send_time(int seqno);
 bool was_packet_retransmitted(int seqno);
 
-// Function prototypes for congestion control
-void update_congestion_window(bool ack_received, bool timeout, bool triple_dup_ack);
+//managing congestion control
+void update_congestion_window(bool ack_received, bool timeout, bool triple_dup_ack); //adjusting cwnd based on the possible events (getting an ack, a timeout, or 3 dup acks)
 void log_congestion_state(void);
-void log_to_csv(void); // New function to log to CSV
+void log_to_csv(void); // logging thr functions to track the congestion state
 
 #define STDIN_FD    0
-#define RETRY  120 
-#define MAX_WINDOW_SIZE 100 // Maximum window size allowed
-#define MAX_TIMESTAMPS 1000 // Maximum number of timestamps to track
+#define RETRY  120  //defining a retry limit in order not to go into an infinite loop
+#define MAX_WINDOW_SIZE 100 // max window size
+#define MAX_TIMESTAMPS 1000 // max timestamps for tracking
 
-int next_seqno=0;
-int send_base=0;
-Vector packet_window; // Window vector
-int sockfd, serverlen;
-struct sockaddr_in serveraddr;
-struct itimerval timer; 
-tcp_packet *sndpkt;
-tcp_packet *recvpkt;
-sigset_t sigmask;       
-int previous_acks[3] = {-1, -1, -1}; 
-int acknum = 0;
-int packet_count = 0;
+int next_seqno=0; //initially zero increment for each pkt
+int send_base=0; //initially zero increments with acks
+Vector packet_window; // from defined vector (check vector.c, vector.h )
+int sockfd, serverlen; //socket file descriptor for network communication + the length of the server address struct
+struct sockaddr_in serveraddr; //carries the IP address and port number of dest
+struct itimerval timer; //setup and manage timeout intervals
+tcp_packet *sndpkt; //points to the pkt thats currently being sent
+tcp_packet *recvpkt;//points to the received pkts/ acks
+sigset_t sigmask; //responsible for making sure that timers wont interupt other operations 
+int previous_acks[3] = {-1, -1, -1}; //array to detect 3 sup acks
+int acknum = 0;//ack counter
+int packet_count = 0;//total pkts sent 
 int eof_reached = 0;       // eof reached
 int eof_packet_sent = 0;   // eof sent
 int eof_acked = 0;         // eof acked
 tcp_packet *eof_packet = NULL;  // eof packet ptr
-int last_ack_received = -1;     // Track last ACK for better duplicate detection
+int last_ack_received = -1;     // track last ack for better duplicate detection
 
-// RTT and RTO related variables
-packet_timestamp timestamps[MAX_TIMESTAMPS];  // Array to store packet timestamps
-int timestamp_count = 0;                      // Number of timestamps recorded
-int srtt = -1;                                // Smoothed RTT (initially undefined)
-int rttvar = -1;                              // RTT variation (initially undefined)
-int rto = INITIAL_RTO;                        // Current RTO value in milliseconds
-int consecutive_timeouts = 0;                 // Count of consecutive timeouts for backoff
+//variables to track the rtt and rto
+packet_timestamp timestamps[MAX_TIMESTAMPS];  //array storing the timestamps for the pkts that are snt out
+int timestamp_count = 0;                      // num of timestamps recorded
+int srtt = -1;                                // initially not defined, smoothed RTT which is calculated by srtt = (1-ALPHA) * srtt + ALPHA * measured_rtt
+int rttvar = -1;                              //  initially not defined, the rtt deviation
+int rto = INITIAL_RTO;                        
+int consecutive_timeouts = 0;                 // counting the number of consecutive timeouts for the exponential backoff
 
-// Congestion control variables
-int ssthresh = INITIAL_SSTHRESH;              // Slow start threshold in packets
-int congestion_state = SLOW_START;            // Current congestion control state
-float fractional_cwnd = 0;                    // For precise CWND calculation in CA
+// variables for congestion control
+int ssthresh = INITIAL_SSTHRESH;              // slow start thresh
+int congestion_state = SLOW_START;            // initially the state will be at slow start, later can move to congestion avoidance
+float fractional_cwnd = 0;                    // float definition to allow the later fractional increment (+=1/cwnd) in congestion avoidance
 
-// CSV logging variables
 FILE *csv_file = NULL;
 
-// Get high-precision timestamp with microseconds as decimal
+// getting a more precise timestamp (microsec as decimal)
 double get_timestamp_with_ms() {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (double)tv.tv_sec + ((double)tv.tv_usec / 1000000.0);
 }
 
-// Log to CSV with current timestamp, cwnd, and ssthresh
+//logging all the congetion control details into a csv file
 void log_to_csv() {
-    if (csv_file != NULL) {
-        double timestamp = get_timestamp_with_ms();
-        
-        // Use fractional_cwnd when in congestion avoidance, otherwise use vector size
+    if (csv_file != NULL) { //check if file is succesfully opened beforfe proceeding 
+        double timestamp = get_timestamp_with_ms(); //get precise current timestamp 
+        //check if we are currently at slow start or congestion avoidance to determine whether to increment fractionally or not
         float cwnd_value = (congestion_state == CONGESTION_AVOIDANCE && fractional_cwnd > 0) 
                           ? fractional_cwnd 
                           : (float)vector_size(&packet_window);
-        
+        //immediately writing to the file 
         fprintf(csv_file, "%.6f,%.2f,%d\n", timestamp, cwnd_value, ssthresh);
-        fflush(csv_file); // Ensure data is written immediately
+        fflush(csv_file); 
     }
 }
 
@@ -126,67 +121,62 @@ void resend_packets(int sig) //resend oldest packet
 {
     if (sig == SIGALRM)
     {
-        VLOG(INFO, "Timeout happened for segment starting at %d", send_base);
+        VLOG(INFO, "Timeout happened for segment starting at %d", send_base); 
         
-        // Implement exponential backoff for consecutive timeouts
+        // exponential back off 
         consecutive_timeouts++;
         if (consecutive_timeouts > 1) {
-            rto *= 2;  // Double the RTO on consecutive timeouts
-            if (rto > MAX_RTO) {
-                rto = MAX_RTO;  // Cap at maximum allowed value
+            rto *= 2;  // more than 1 timeout for pkt consecutively, double the rto
+            if (rto > MAX_RTO) { //making sure to limtit the rto to the max which is 240 seconds
+                rto = MAX_RTO;  
             }
             printf("Exponential backoff: RTO now %d ms for segment %d\n", rto, send_base);
         }
         
-        // Update congestion control for timeout
-        update_congestion_window(false, true, false);
-        
-        // Log after timeout (even though not from ACK)
-        log_to_csv();
-        
-        // resend eof packet if needed
-        if (eof_reached && eof_packet_sent && !eof_acked) {
+        update_congestion_window(false, true, false); //updating the cwnd afer timeout
+    
+        log_to_csv(); //logging to the csv
+
+        if (eof_reached && eof_packet_sent && !eof_acked) { // this handles the case if we reached eof, and it was sent but not acked
             printf("Timeout - eof packet resend\n");
             if(sendto(sockfd, eof_packet, TCP_HDR_SIZE, 0, 
-                    (const struct sockaddr *)&serveraddr, serverlen) < 0) {
+                    (const struct sockaddr *)&serveraddr, serverlen) < 0) { //resenf the eof pkt
                 error("sendto");
             }
-        } else {
-            // send oldest packet normally
-            int window_index = (send_base/DATA_SIZE) % vector_capacity(&packet_window);
+        } else { // this handles the typical case, so oldest pkt is being sent
+            int window_index = (send_base/DATA_SIZE) % vector_capacity(&packet_window); //calc the index of the oldest unacked pkt
             tcp_packet* oldest_packet = vector_at(&packet_window, window_index); 
-            if (oldest_packet != NULL) {
+            if (oldest_packet != NULL) { 
                 printf("Timeout - packet resend with seqno: %d, RTO: %d ms, Segment: %d\n", 
                        oldest_packet->hdr.seqno, rto, send_base);
-                
-                // Record this packet as retransmitted (for Karn's algorithm)
-                record_packet_sent(oldest_packet->hdr.seqno, true);
+            
+                record_packet_sent(oldest_packet->hdr.seqno, true); //making sure to mark this as retransmission to skip during implementation of karns algorithm
                 
                 if(sendto(sockfd, oldest_packet, TCP_HDR_SIZE + get_data_size(oldest_packet), 0, 
-                        (const struct sockaddr *)&serveraddr, serverlen) < 0) {
+                        (const struct sockaddr *)&serveraddr, serverlen) < 0) { //handling error case of returing a negative value which means that there was a network related error  
                     error("sendto");
                 }
-            } else {
+            } else { // handling the error case of a missing packets
                 printf("Warning: No packet found at index %d to resend\n", window_index);
             }
         }
         
-        init_timer(rto, resend_packets);  // Update timer with current RTO
+        init_timer(rto, resend_packets);  // updating timer to current rto
         start_timer(); // restart timer on oldest packet
     }
 }
 
 
-void start_timer()
+void start_timer() 
 {
-    sigprocmask(SIG_UNBLOCK, &sigmask, NULL);
-    setitimer(ITIMER_REAL, &timer, NULL);
+    sigprocmask(SIG_UNBLOCK, &sigmask, NULL); //unnlocking any signal the was set in sigmask
+    setitimer(ITIMER_REAL, &timer, NULL); // starting a timer to genertae SIGALRM signals only for when the timer expires
 }
 
 
-void stop_timer()
+void stop_timer() 
 {
-    sigprocmask(SIG_BLOCK, &sigmask, NULL);
+    sigprocmask(SIG_BLOCK, &sigmask, NULL); //here we block the signals to stop the SIGALRM from interupting the process until its unlocked again
 }
 
 
@@ -197,66 +187,61 @@ void stop_timer()
  */
 void init_timer(int delay, void (*sig_handler)(int)) 
 {
-    signal(SIGALRM, sig_handler);
-    timer.it_interval.tv_sec = delay / 1000;   
-    timer.it_interval.tv_usec = (delay % 1000) * 1000;  
-    timer.it_value.tv_sec = delay / 1000;     
+    signal(SIGALRM, sig_handler); //calling sig_handler for the SIGALRM signal is received 
+    timer.it_interval.tv_sec = delay / 1000; //2nd part of the timer also converting ms to secs  
+    timer.it_interval.tv_usec = (delay % 1000) * 1000;   //get remainder of the delay by using modulo 1000 then cnvert to microsecs
+    timer.it_value.tv_sec = delay / 1000; 
     timer.it_value.tv_usec = (delay % 1000) * 1000;
 
-    sigemptyset(&sigmask);
-    sigaddset(&sigmask, SIGALRM);
+    sigemptyset(&sigmask);//clear any previos signal settings
+    sigaddset(&sigmask, SIGALRM);//used to control when the timer can interrup the start/stop timer
 }
 
-// Function to record packet send time for RTT calculation
 void record_packet_sent(int seqno, bool is_retransmit) 
 {
     int i;
     
-    // First check if we already have an entry for this sequence number
-    for (i = 0; i < timestamp_count; i++) {
-        if (timestamps[i].seqno == seqno) {
-            // Update existing entry
-            gettimeofday(&timestamps[i].send_time, NULL);
-            timestamps[i].retransmitted = is_retransmit;
+//check for existing enteries
+    for (i = 0; i < timestamp_count; i++) { //loop over the existing timestamps
+        if (timestamps[i].seqno == seqno) { //if we find a matched seq num
+            gettimeofday(&timestamps[i].send_time, NULL);//update the send time to the current time using gettimeofday()
+            timestamps[i].retransmitted = is_retransmit;// setting the retransmission flag if needed
             return;
         }
     }
     
-    // If we reach MAX_TIMESTAMPS, start overwriting from the beginning
-    if (timestamp_count >= MAX_TIMESTAMPS) {
-        timestamp_count = 0;
+    if (timestamp_count >= MAX_TIMESTAMPS) { //check if we reached max time stamp
+        timestamp_count = 0;//if yes, reset the counter to 0 
     }
-    
-    // Add new entry
-    timestamps[timestamp_count].seqno = seqno;
-    gettimeofday(&timestamps[timestamp_count].send_time, NULL);
-    timestamps[timestamp_count].retransmitted = is_retransmit;
-    timestamp_count++;
+
+    timestamps[timestamp_count].seqno = seqno; //store seq num of pkt
+    gettimeofday(&timestamps[timestamp_count].send_time, NULL); //record current time
+    timestamps[timestamp_count].retransmitted = is_retransmit;//setting the restransmison flag to "is_retrasnmit"
+    timestamp_count++; //incrementing the counter
 }
 
-// Get the send time for a packet with given sequence number
-struct timeval* get_packet_send_time(int seqno) 
+
+struct timeval* get_packet_send_time(int seqno) //returns a pointer to the struct timeval
 {
-    for (int i = 0; i < MAX_TIMESTAMPS; i++) {
-        if (timestamps[i].seqno == seqno) {
-            return &timestamps[i].send_time;
+    for (int i = 0; i < MAX_TIMESTAMPS; i++) { //loop over all the possible timestamps
+        if (timestamps[i].seqno == seqno) { //check if the current timestamp entry matches with the resquested seq num
+            return &timestamps[i].send_time; //if matched, return its memory address
         }
     }
-    return NULL;
+    return NULL;//otherwise return null as there is no send time info available
 }
 
-// Check if a packet was retransmitted (for Karn's algorithm)
-bool was_packet_retransmitted(int seqno) 
+
+bool was_packet_retransmitted(int seqno) //checking for retransmitted packets to ignore them in calculating rtt measurments (karns algorithm)
 {
-    for (int i = 0; i < MAX_TIMESTAMPS; i++) {
+    for (int i = 0; i < MAX_TIMESTAMPS; i++) { //similar to the above block
         if (timestamps[i].seqno == seqno) {
             return timestamps[i].retransmitted;
         }
     }
-    return false;
+    return false; //returning false assuming that pkt not found in the timestamp array has not been retransmitted
 }
-
-// Calculate RTT for an acknowledged packet and update RTO
+//STOPPEDHERE
 void update_rtt(int ackno, struct timeval *send_time, bool was_retransmitted) 
 {
     struct timeval now, diff;
