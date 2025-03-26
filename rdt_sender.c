@@ -616,47 +616,45 @@ int main (int argc, char **argv)
                 
                 if (retransmit_packet != NULL) { // send oldest packet again
                     printf("Fast retransmitting packet with seqno: %d\n", retransmit_packet->hdr.seqno);
+                
+                    record_packet_sent(retransmit_packet->hdr.seqno, true); //record that this packet is a retransmission to skip for karns alogirthm 
                     
-                    // Mark packet as retransmitted for Karn's algorithm
-                    record_packet_sent(retransmit_packet->hdr.seqno, true);
-                    
-                    if(sendto(sockfd, retransmit_packet, TCP_HDR_SIZE + get_data_size(retransmit_packet), 0, 
+                    if(sendto(sockfd, retransmit_packet, TCP_HDR_SIZE + get_data_size(retransmit_packet), 0,  //pointer to the packet that needs to be retransmitted
                             (const struct sockaddr *)&serveraddr, serverlen) < 0) {
                         error("sendto");
                     }
                     
-                    // reset dupe ack array and ctr
+                    // reset dupe ack tracking buffer and counter 
                     previous_acks[0] = previous_acks[1] = previous_acks[2] = -1;
                     acknum = 0;
-                } else {
+                } else { //handling the error case in case we can find the packet we need to retransmit
                     printf("Warning: No packet found at index %d for fast retransmit\n", window_index);
                 }
             }
         }
         
-        // Display current window status
+        // displaying the status of the window 
         printf("Current status - Window: %d packets, ssthresh: %d, state: %s, Next Seq: %d, Base: %d, RTO: %d ms\n", 
               vector_size(&packet_window), ssthresh, 
               congestion_state == SLOW_START ? "SLOW_START" : "CONGESTION_AVOIDANCE",
               next_seqno, send_base, rto);
     }
     
-    // Free any remaining packets in the window
-    for (int i = 0; i < vector_capacity(&packet_window); i++) {
+
+    for (int i = 0; i < vector_capacity(&packet_window); i++) { //clean up, free pkts that are still in the window when we exit the loop
         tcp_packet* packet = vector_at(&packet_window, i);
         if (packet != NULL) {
             free(packet);
         }
     }
     
-    if (eof_packet != NULL) {
+    if (eof_packet != NULL) { //freeing the eof packet if it exists 
         free(eof_packet);
     }
     
-    vector_free(&packet_window);
+    vector_free(&packet_window); //freeing the memory alocated for the packet window struct defiend in the beginning 
     
-    // Close CSV file
-    if (csv_file != NULL) {
+    if (csv_file != NULL) { //clsoing the csv and indication where it was saved
         fclose(csv_file);
         printf("CSV log file saved to: %s\n", CSV_FILENAME);
     }
