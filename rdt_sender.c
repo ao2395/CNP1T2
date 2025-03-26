@@ -363,16 +363,9 @@ void update_congestion_window(bool ack_received, bool timeout, bool triple_dup_a
 
 
 
-
-
-
-//STOPPED HERE
-
-
-void log_congestion_state(void) 
+void log_congestion_state(void) //to log the congestion state 
 {
     const char* state_str;
-    
     switch (congestion_state) {
         case SLOW_START:
             state_str = "SLOW_START";
@@ -383,86 +376,74 @@ void log_congestion_state(void)
         default:
             state_str = "UNKNOWN";
     }
-    
-    printf("Congestion Control: state=%s, window_size=%d, ssthresh=%d\n", 
+    printf("Congestion Control: state=%s, window_size=%d, ssthresh=%d\n", //logging the current congestion control state, window size, and ssthresh
            state_str, vector_size(&packet_window), ssthresh);
 }
 
 int main (int argc, char **argv)
 {
-    int portno, len;
-    char *hostname;
-    char buffer[DATA_SIZE];
-    FILE *fp;
+    int portno, len;//declaring the port number of the server, and len
+    char *hostname; //to save the server hostname
+    char buffer[DATA_SIZE]; //buffer to read from file
+    FILE *fp; //pointer to read the input files
 
-    /* check command line arguments */
-    if (argc != 4) {
+    if (argc != 4) { //checks if the 4 arguements are passed in (program name, hostname, port, filename)
         fprintf(stderr,"usage: %s <hostname> <port> <FILE>\n", argv[0]);
         exit(0);
     }
-    hostname = argv[1];
+    hostname = argv[1]; //extracting the arguements and saving them in the appropriate variable
     portno = atoi(argv[2]);
     fp = fopen(argv[3], "r");
-    if (fp == NULL) {
+    if (fp == NULL) { //checking if file operning is successful 
         error(argv[3]);
     }
 
-    /* socket: create the socket */
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0); //creating udp socket and checking for errors in socket creation
     if (sockfd < 0) 
         error("ERROR opening socket");
 
-    /* initialize server server details */
-    bzero((char *) &serveraddr, sizeof(serveraddr));
-    serverlen = sizeof(serveraddr);
+    bzero((char *) &serveraddr, sizeof(serveraddr)); //initially the server address struct is set to zeros
+    serverlen = sizeof(serveraddr);//to store the length of the server address struct
 
-    /* covert host into network byte order */
-    if (inet_aton(hostname, &serveraddr.sin_addr) == 0) {
-        fprintf(stderr,"ERROR, invalid host %s\n", hostname);
+    if (inet_aton(hostname, &serveraddr.sin_addr) == 0) { //conversion of  hostname string to ip add
+        fprintf(stderr,"ERROR, invalid host %s\n", hostname); //checking for an invalid hostname
         exit(0);
     }
 
-    /* build the server's Internet address */
     serveraddr.sin_family = AF_INET;
     serveraddr.sin_port = htons(portno);
 
-    assert(MSS_SIZE - TCP_HDR_SIZE > 0);
+    assert(MSS_SIZE - TCP_HDR_SIZE > 0); //checking if there is room for data in pkts
     
-    // Initialize packet window with MAX_WINDOW_SIZE
-    vector_init(&packet_window, MAX_WINDOW_SIZE);
+    vector_init(&packet_window, MAX_WINDOW_SIZE); //initializing the packet window vector with the max cap
+    packet_window.v_size = 1;  //initial congestion control params, window size=1
+    ssthresh = INITIAL_SSTHRESH; // starting with the inital slow start thresh from declared constant INITIAL_SSTHRESH
+    congestion_state = SLOW_START; // state starts as slow start initially 
     
-    // Initialize congestion control - set window size to 1 for slow start
-    packet_window.v_size = 1;  
-    ssthresh = INITIAL_SSTHRESH;
-    congestion_state = SLOW_START;
-    
-    // Initialize CSV logging
-    csv_file = fopen(CSV_FILENAME, "w");
-    if (csv_file == NULL) {
-        fprintf(stderr, "Warning: Could not open CSV file for logging: %s\n", CSV_FILENAME);
+
+    csv_file = fopen(CSV_FILENAME, "w"); //opening and writing to the csv file to log the congestion window changes 
+    if (csv_file == NULL) {// if file opening fails 
+        fprintf(stderr, "Warning: Could not open CSV file for logging: %s\n", CSV_FILENAME); //warn
     } else {
-        // Log initial state
-        log_to_csv();
+        log_to_csv(); //otherwise log the initial state
     }
     
-    // Log initial congestion control state
-    log_congestion_state();
-
-    // Initialize RTT and RTO variables
-    srtt = -1;
-    rttvar = -1;
-    rto = INITIAL_RTO;
-    consecutive_timeouts = 0;
+    log_congestion_state(); //log the initial congestion control state
+//initially sinxe smooth rtt and rttvar are not calculated yet
+    srtt = -1; //initially set to -1
+    rttvar = -1;//initially set to -1
+    rto = INITIAL_RTO;//set to 3 secs
+    consecutive_timeouts = 0; //resetting the counter that checks for consecutive timouts to check for new timeouts
     
-    // Initialize timer with initial RTO instead of RETRY
-    init_timer(rto, resend_packets);
+
+    init_timer(rto, resend_packets); //initial vlaues of the rto 
     next_seqno = 0;
     send_base = 0;
     
     printf("Starting with initial RTO: %d ms\n", rto);
     
     while (1) {
-        // when eof is acked exit
+        
         if (eof_acked) {
             printf("EOF packet has been ack'd. Exiting.\n");
             break;
