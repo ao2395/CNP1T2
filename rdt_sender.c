@@ -436,21 +436,21 @@ int main (int argc, char **argv)
     consecutive_timeouts = 0; //resetting the counter that checks for consecutive timouts to check for new timeouts
     
 
-    init_timer(rto, resend_packets); //initial vlaues of the rto 
+    init_timer(rto, resend_packets); //initializing the timer with params :the rto value, and the call back function for expired timer
     next_seqno = 0;
     send_base = 0;
     
     printf("Starting with initial RTO: %d ms\n", rto);
     
-    while (1) {
-        
-        if (eof_acked) {
+    while (1) { 
+
+        if (eof_acked) { //if we reached an eof pkt and it is acked, print message abd break the loop
             printf("EOF packet has been ack'd. Exiting.\n");
             break;
         }
         
-        // Dynamic window size controlled by congestion control
-        int current_window_size = vector_size(&packet_window);
+  
+        int current_window_size = vector_size(&packet_window); 
         
         // send if window isn't full or isn't at eof
         while (next_seqno < send_base + current_window_size * DATA_SIZE && !eof_reached) {
@@ -480,20 +480,19 @@ int main (int argc, char **argv)
                 packet_window.data[window_index] = NULL;
             }
             
-            // Update the packet in the vector
-            packet_window.data[window_index] = sndpkt;
+            packet_window.data[window_index] = sndpkt; //store new packet in the window
             
-            // Update vector size if needed but don't exceed congestion window size
+
             if (window_index >= vector_size(&packet_window)) {
-                // The actual size is determined by congestion control, so we don't update here
+                // placeholder- the actual size is determined by congestion control, so we don't update here
             }
             
             VLOG(DEBUG, "Sending packet %d to %s (Window size: %d, RTO: %d ms, State: %s)", 
                 next_seqno, inet_ntoa(serveraddr.sin_addr), current_window_size, rto,
                 congestion_state == SLOW_START ? "SLOW_START" : "CONGESTION_AVOIDANCE");
             
-            // Record packet sent time for RTT calculation (not retransmitted)
-            record_packet_sent(next_seqno, false);
+
+            record_packet_sent(next_seqno, false); //record the time that the pkt was sent to use later for rtt calculation, and also marking false as it its not a restransmission
             
             // send packet 
             if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + len, 0, 
@@ -503,7 +502,7 @@ int main (int argc, char **argv)
             
             // start timer for first packet 
             if(next_seqno == send_base) {
-                init_timer(rto, resend_packets);  // Use current RTO value
+                init_timer(rto, resend_packets);  //current rto value
                 start_timer();
             }
             
@@ -515,7 +514,7 @@ int main (int argc, char **argv)
         // if all data has been acked and eof packet hasn't been sent but has been reached
         if (eof_reached && !eof_packet_sent && send_base >= next_seqno) {
             printf("All data acknowledged, sending EOF packet\n");
-            if(sendto(sockfd, eof_packet, TCP_HDR_SIZE, 0,  // send eof packet
+            if(sendto(sockfd, eof_packet, TCP_HDR_SIZE, 0,  // send eof packet and mark it as sent
                     (const struct sockaddr *)&serveraddr, serverlen) < 0) {
                 error("sendto");
             }
@@ -525,9 +524,9 @@ int main (int argc, char **argv)
         }
         
         
-        // receive acks
+        // receive acks from server
         if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
-                    (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0) {
+                    (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0) {//if ack receiving is failed, skip to next iteration 
             continue;
         }
         
@@ -538,47 +537,44 @@ int main (int argc, char **argv)
         
         // check if ack is for eof (FIN FLAG) so it doesn't mix up with dupe acks of the last packet
         if (eof_packet_sent && recvpkt->hdr.ackno >= next_seqno && recvpkt->hdr.ctr_flags==FIN) {
-            printf("Received ACK for EOF packet\n");
-            eof_acked = 1;
-            stop_timer();
-            continue;
+            printf("Received ACK for EOF packet\n"); // 
+            eof_acked = 1;//mark as acked
+            stop_timer(); //stop timer
+            continue; // to next iteration
         }
         
         if(recvpkt->hdr.ackno > send_base) { // if ack is new
             previous_acks[0] = previous_acks[1] = previous_acks[2] = -1; // reset dupe ack array
             acknum = 0;
-            last_ack_received = recvpkt->hdr.ackno; // Update last ACK received
+            last_ack_received = recvpkt->hdr.ackno; // update last ack tracker
+
+            log_to_csv(); //log to csv immediately 
             
-            // Log to CSV immediately when we receive a new ACK (not duplicate)
-            // This logs CWND info when ACK is received, before updating CWND
-            log_to_csv();
-            
-            // Process acknowledged packets
+
             int last_acknowledged = send_base;
             
             // free ack'd packet and update send base
             while(send_base < recvpkt->hdr.ackno) {
-                int window_index = (send_base / DATA_SIZE) % vector_capacity(&packet_window);
-                tcp_packet* packet_to_free = vector_at(&packet_window, window_index);
-                if(packet_to_free != NULL) {
-                    // For the last packet being freed, update RTT if not retransmitted
-                    if (send_base == last_acknowledged) {
-                        struct timeval* send_time = get_packet_send_time(send_base);
-                        bool retransmitted = was_packet_retransmitted(send_base);
+                int window_index = (send_base / DATA_SIZE) % vector_capacity(&packet_window); //calculating the index position in the pkt window where the packet is stored
+                tcp_packet* packet_to_free = vector_at(&packet_window, window_index); //ge tthe pointer to the packet at the calculated window index
+                if(packet_to_free != NULL) { //check if there is an existing packet at this position
+                    if (send_base == last_acknowledged) { // check if the current packet is the last acked packet that was recorded before processign current ack, to consider for rtt calculaiton
+                        struct timeval* send_time = get_packet_send_time(send_base); //timestamo for when the packet was sent
+                        bool retransmitted = was_packet_retransmitted(send_base); //checking if packet was retransmitted
                         
-                        if (send_time != NULL) {
+                        if (send_time != NULL) {  //update rtt calcuation but check if send time isnt null first
                             update_rtt(send_base, send_time, retransmitted);
                         }
                     }
                     
-                    free(packet_to_free);
+                    free(packet_to_free); //free the memory allocated for the pkt since its acked now
                     packet_window.data[window_index] = NULL;
                     
-                    // Update congestion window for this ACK
-                    update_congestion_window(true, false, false);
+                
+                    update_congestion_window(true, false, false); //update congestion window (new ack->true, not a timeout->false, and not a triple duplicate ACK->false)
                 }
                 
-                last_acknowledged = send_base;
+                last_acknowledged = send_base; //update to the curr val of send base before incrementng 
                 
                 // increment by full packet size
                 if (send_base + DATA_SIZE <= recvpkt->hdr.ackno) {
@@ -591,40 +587,32 @@ int main (int argc, char **argv)
             // time packet on new sendbase
             if(send_base < next_seqno) {
                 stop_timer();
-                init_timer(rto, resend_packets);  // Use current RTO value
+                init_timer(rto, resend_packets);  // use current rto value
                 start_timer();
             } else {
                 stop_timer();
             }
-        } else if (recvpkt->hdr.ackno == send_base && recvpkt->hdr.ackno != last_ack_received) {
-            // First time seeing this ACK that matches send_base (not a duplicate)
-            last_ack_received = recvpkt->hdr.ackno;
+        } else if (recvpkt->hdr.ackno == send_base && recvpkt->hdr.ackno != last_ack_received) {//in the case that the received ack number is equal to the oldest unacked packet, and this ack number is not the same as the last ack, then
+            last_ack_received = recvpkt->hdr.ackno;//track the ack
+        
+            log_to_csv(); //log the current state to the csv file
             
-            // Log to CSV for this non-duplicate ACK as well
-            log_to_csv();
+        } else { //in all other cases, which is the dupe ack case
+            VLOG(INFO, "Duplicate ACK received: %d", recvpkt->hdr.ackno); //log
+            previous_acks[acknum % 3] = recvpkt->hdr.ackno; // store the ack number in a looped buffer of size 3 using modulo
+            acknum++; //increment the ack trackign varaible
             
-            // Process as regular ACK...
-            // (In this case, we don't need to do anything - just avoid counting as duplicate)
-        } else {
-            // dupe ack received
-            VLOG(INFO, "Duplicate ACK received: %d", recvpkt->hdr.ackno);
-            previous_acks[acknum % 3] = recvpkt->hdr.ackno; // add it to dupe ack array
-            acknum++;
-            
-            // Check for triple duplicate ACKs
-            if (acknum >= 3 && previous_acks[0] == previous_acks[1] && previous_acks[1] == previous_acks[2] && previous_acks[0] != -1) {
+            if (acknum >= 3 && previous_acks[0] == previous_acks[1] && previous_acks[1] == previous_acks[2] && previous_acks[0] != -1) { //check for the case of three dupe acks
                 
-                VLOG(INFO, "3 Duplicate ACKs detected - Fast retransmit"); 
-                
-                // Update congestion control for triple duplicate ACK
-                update_congestion_window(false, false, true);
-                
-                // Log after triple duplicate ACK
-                log_to_csv();
+                VLOG(INFO, "3 Duplicate ACKs detected - Fast retransmit");  //log
+    
+                update_congestion_window(false, false, true); //(not new ack, not a timeout, is a tripple dupe ack)
+               
+                log_to_csv();//log to the csv
                 
                 // fast retransmit the packet
-                int window_index = (send_base / DATA_SIZE) % vector_capacity(&packet_window);
-                tcp_packet* retransmit_packet = vector_at(&packet_window, window_index);
+                int window_index = (send_base / DATA_SIZE) % vector_capacity(&packet_window); //calculates the window index for the packet that needs to be retransmitted
+                tcp_packet* retransmit_packet = vector_at(&packet_window, window_index); //retreive pointer to the packet that needs to be retransmitted 
                 
                 if (retransmit_packet != NULL) { // send oldest packet again
                     printf("Fast retransmitting packet with seqno: %d\n", retransmit_packet->hdr.seqno);
