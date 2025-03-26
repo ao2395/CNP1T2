@@ -241,149 +241,126 @@ bool was_packet_retransmitted(int seqno) //checking for retransmitted packets to
     }
     return false; //returning false assuming that pkt not found in the timestamp array has not been retransmitted
 }
-//STOPPEDHERE
-void update_rtt(int ackno, struct timeval *send_time, bool was_retransmitted) 
+
+
+
+void update_rtt(int ackno, struct timeval *send_time, bool was_retransmitted) //function for updating the RTT based on akcs received 
 {
-    struct timeval now, diff;
-    int rtt_ms;
+    struct timeval now, diff; //variables for current time and rtt difference
+    int rtt_ms; //rtt val in ms
     
-    // Skip RTT calculation for retransmitted packets (Karn's algorithm)
-    if (was_retransmitted) {
+    if (was_retransmitted) { //ignore rtt calc from retrasnmitted packets to implement karns algorthm
         printf("Skipping RTT calculation for retransmitted packet (Karn's algorithm)\n");
         return;
     }
     
     gettimeofday(&now, NULL);
     
-    // Calculate RTT in milliseconds
-    timersub(&now, send_time, &diff);
-    rtt_ms = diff.tv_sec * 1000 + diff.tv_usec / 1000;
+    timersub(&now, send_time, &diff); //diff = now - send_time
+    rtt_ms = diff.tv_sec * 1000 + diff.tv_usec / 1000; //convert to milli secs
     
     printf("Measured RTT: %d ms for packet %d\n", rtt_ms, ackno);
     
-    // Initialize SRTT and RTTVAR on first RTT measurement
     if (srtt == -1) {
-        srtt = rtt_ms;
-        rttvar = rtt_ms / 2;
+        srtt = rtt_ms; //initialize the smooth rtt to the first rtt sample
+        rttvar = rtt_ms / 2; //rtt variation is initalliy firstmeasurement/2
         printf("Initial SRTT: %d ms, RTTVAR: %d ms\n", srtt, rttvar);
     } else {
-        // Update RTTVAR: RTTVAR = (1-BETA) * RTTVAR + BETA * |SRTT - RTT|
-        rttvar = (int)((1 - BETA) * rttvar + BETA * abs(srtt - rtt_ms));
-        
-        // Update SRTT: SRTT = (1-ALPHA) * SRTT + ALPHA * RTT
+       //updating smooth rtt and rtt variation by using Exponential Weighted Moving Average
+        rttvar = (int)((1 - BETA) * rttvar + BETA * abs(srtt - rtt_ms)); 
         srtt = (int)((1 - ALPHA) * srtt + ALPHA * rtt_ms);
         
         printf("Updated SRTT: %d ms, RTTVAR: %d ms\n", srtt, rttvar);
     }
-    
-    // Calculate new RTO: RTO = SRTT + K * RTTVAR
-    rto = srtt + K * rttvar;
-    
-    // Ensure RTO is within bounds
+    rto = srtt + K * rttvar; //calculating rto using the formula mentioned in the slides, where k=4
+//making sure rto is within the limit
     if (rto < MIN_RTO) {
         rto = MIN_RTO;
-    } else if (rto > MAX_RTO) {
+    } else if (rto > MAX_RTO) { 
         rto = MAX_RTO;
     }
     
     printf("New RTO: %d ms\n", rto);
-    
-    // Reset consecutive timeout counter on successful ACK
-    consecutive_timeouts = 0;
+
+    consecutive_timeouts = 0; //upon getting a valid ack. reset the consecutive timeout counter to 0 to record the next consecutive timeout
 }
 
-// Get the current RTO value
-int get_current_rto(void) 
+int get_current_rto(void) //get current rto value
 {
     return rto;
 }
 
-// Update congestion window based on events
-// Update congestion window based on events
-void update_congestion_window(bool ack_received, bool timeout, bool triple_dup_ack) 
+
+void update_congestion_window(bool ack_received, bool timeout, bool triple_dup_ack) //function to update the congestion window based on the 3 possible network events: 1- normal ack received, 2- timeout, 3- 3 dupe acks
+
 {
-    int old_state = congestion_state;
+    int old_state = congestion_state; //before any adjustments the current congestion state and window are stored
     int old_size = vector_size(&packet_window);
     
-    if (timeout) {
-        // On timeout: enter slow start and set ssthresh to half of current window
-        ssthresh = vector_size(&packet_window) / 2;
-        if (ssthresh < 2) ssthresh = 2; // Minimum ssthresh
+    if (timeout) { //upon timeout
+        ssthresh = vector_size(&packet_window) / 2;// ssthresh is half the current window
+        if (ssthresh < 2) ssthresh = 2;  //enforcing a min ssthresh of 2
         
-        // Reset vector size to 1 for slow start
-        packet_window.v_size = 1;
-        congestion_state = SLOW_START;
-        fractional_cwnd = 0; // Reset fractional CWND
+        packet_window.v_size = 1; //vector size=1 for slow start 
+        congestion_state = SLOW_START; //state is changed to slow start 
+        fractional_cwnd = 0; // reset to 0 , to be used later when state = congestion avoidance
         
         printf("TIMEOUT: window_size=%d, ssthresh=%d, state=SLOW_START\n", 
                vector_size(&packet_window), ssthresh);
     } 
-    else if (triple_dup_ack) {
-        // Fast Retransmit - adjust ssthresh to max(CWND/2, 2)
-        int half_window = vector_size(&packet_window) / 2;
-        ssthresh = (half_window > 2) ? half_window : 2; 
+    else if (triple_dup_ack) { //in the case of 3 duplicate acks
+        int half_window = vector_size(&packet_window) / 2; //ssthresh is current window halfed
+        ssthresh = (half_window > 2) ? half_window : 2;  //enforcing min ssthresh of 2
         
-        // Set window size to 1 and enter slow start (similar to timeout)
-        packet_window.v_size = 1;
-        congestion_state = SLOW_START;
-        fractional_cwnd = 0; // Reset fractional CWND
+        packet_window.v_size = 1;//window size is set to 1 
+        congestion_state = SLOW_START; //starts slow start phase
+        fractional_cwnd = 0; 
         
         printf("TRIPLE DUP ACK: window_size=%d, ssthresh=%d, state=SLOW_START\n", 
                vector_size(&packet_window), ssthresh);
     }
-    else if (ack_received) {
+    else if (ack_received) { //normal ack case
         if (congestion_state == SLOW_START) {
-            // In slow start: increase window exponentially by exactly 1 for each ACK
-            // This ensures proper progression: 1, 2, 4, 8, etc.
-            packet_window.v_size += 1;  // Increase by exactly 1 packet per ACK
+            packet_window.v_size += 1;  // the window is incremented by one per ack received, and if all packets in window acked, the window will double for each rtt
             
-            if (packet_window.v_size > MAX_WINDOW_SIZE) {
+            if (packet_window.v_size > MAX_WINDOW_SIZE) { //forcing a max window size to not overflow the buffer 
                 packet_window.v_size = MAX_WINDOW_SIZE;
             }
             
-            // If window size reaches or exceeds ssthresh, transition to congestion avoidance
-            if (vector_size(&packet_window) >= ssthresh) {
-                congestion_state = CONGESTION_AVOIDANCE;
-                // Initialize fractional_cwnd to exactly match the current window size
-                fractional_cwnd = (float)vector_size(&packet_window);
+            if (vector_size(&packet_window) >= ssthresh) {//checking if the window size reached the ssthresh
+                congestion_state = CONGESTION_AVOIDANCE; //enter congestion avoidance if so
+                fractional_cwnd = (float)vector_size(&packet_window); //initialzing the fractional cwnd so we can accept icrements by +=1/cwnd
                 printf("Transition: SLOW_START -> CONGESTION_AVOIDANCE at window_size=%d\n", 
                        vector_size(&packet_window));
             }
         } 
-        else if (congestion_state == CONGESTION_AVOIDANCE) {
-            // In Congestion Avoidance: increase CWND by exactly 1/CWND for each ACK
-            // This ensures a linear growth of approximately 1 packet per RTT
-            if (fractional_cwnd == 0) {
-                // Initialize on first entry to CA
-                fractional_cwnd = (float)vector_size(&packet_window);
+        else if (congestion_state == CONGESTION_AVOIDANCE) {//handling for congestion avoidance phase
+            if (fractional_cwnd == 0) { //if fractiona cwnd is not already initialized
+                fractional_cwnd = (float)vector_size(&packet_window); //initialize
             }
-            
-            // Increase by 1/CWND for this ACK
-            fractional_cwnd += 1.0 / fractional_cwnd;
-            
-            // Take the floor value for the actual window size
-            int new_window_size = (int)fractional_cwnd; // Floor value
-            
-            // Update window size if it has changed
-            if (new_window_size > vector_size(&packet_window)) {
+
+            fractional_cwnd += 1.0 / fractional_cwnd;// for each ack fractional cwn is incremented by 1/cwnd 
+   
+            int new_window_size = (int)fractional_cwnd; // consider floor value
+
+            if (new_window_size > vector_size(&packet_window)) { //if there was an integer increment update the value of the window size
                 packet_window.v_size = new_window_size;
                 if (packet_window.v_size > MAX_WINDOW_SIZE) {
                     packet_window.v_size = MAX_WINDOW_SIZE;
-                    fractional_cwnd = MAX_WINDOW_SIZE; // Cap fractional value too
+                    fractional_cwnd = MAX_WINDOW_SIZE; 
                 }
                 printf("CONGESTION_AVOIDANCE: Incremented window to %d (fractional: %.2f)\n", 
                        vector_size(&packet_window), fractional_cwnd);
             }
         }
     }
-    
-    // Log congestion state changes for debugging
+//in the case that either congestion state was changed, or window size was changed log it
     if (old_state != congestion_state || old_size != vector_size(&packet_window)) {
-        log_congestion_state();
+        log_congestion_state(); //calling the logging 
     }
 }
 
-// Log current congestion control state
+
 void log_congestion_state(void) 
 {
     const char* state_str;
